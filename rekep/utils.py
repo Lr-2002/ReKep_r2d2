@@ -7,8 +7,9 @@ import scipy.interpolate as interpolate
 from scipy.spatial.transform import Slerp
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import RotationSpline
-from . import transform_utils as T
+import transform_utils as T
 import yaml
+
 
 # ===============================================
 # = optimization utils
@@ -22,6 +23,7 @@ def normalize_vars(vars, og_bounds):
         normalized_vars[i] = (vars[i] - b_min) / (b_max - b_min) * 2 - 1
     return normalized_vars
 
+
 def unnormalize_vars(normalized_vars, og_bounds):
     """
     Given 1D variables in [-1, 1] and original bounds, denormalize the variables to the original range.
@@ -31,19 +33,30 @@ def unnormalize_vars(normalized_vars, og_bounds):
         vars[i] = (normalized_vars[i] + 1) / 2 * (b_max - b_min) + b_min
     return vars
 
+
 def calculate_collision_cost(poses, sdf_func, collision_points, threshold):
     assert poses.shape[1:] == (4, 4)
     transformed_pcs = batch_transform_points(collision_points, poses)
-    transformed_pcs_flatten = transformed_pcs.reshape(-1, 3)  # [num_poses * num_points, 3]
-    signed_distance = sdf_func(transformed_pcs_flatten) + threshold  # [num_poses * num_points]
-    signed_distance = signed_distance.reshape(-1, collision_points.shape[0])  # [num_poses, num_points]
+    transformed_pcs_flatten = transformed_pcs.reshape(
+        -1, 3
+    )  # [num_poses * num_points, 3]
+    signed_distance = (
+        sdf_func(transformed_pcs_flatten) + threshold
+    )  # [num_poses * num_points]
+    signed_distance = signed_distance.reshape(
+        -1, collision_points.shape[0]
+    )  # [num_poses, num_points]
     non_zero_mask = signed_distance > 0
     collision_cost = np.sum(signed_distance[non_zero_mask])
     return collision_cost
 
+
 @njit(cache=True, fastmath=True)
 def consistency(poses_a, poses_b, rot_weight=0.5):
-    assert poses_a.shape[1:] == (4, 4) and poses_b.shape[1:] == (4, 4), 'poses must be of shape (N, 4, 4)'
+    assert poses_a.shape[1:] == (4, 4) and poses_b.shape[1:] == (
+        4,
+        4,
+    ), "poses must be of shape (N, 4, 4)"
     min_distances = np.zeros(len(poses_a), dtype=np.float64)
     for i in range(len(poses_a)):
         min_distance = 9999999
@@ -57,12 +70,16 @@ def consistency(poses_a, poses_b, rot_weight=0.5):
         min_distances[i] = min_distance
     return np.mean(min_distances)
 
+
 def transform_keypoints(transform, keypoints, movable_mask):
     assert transform.shape == (4, 4)
     transformed_keypoints = keypoints.copy()
     if movable_mask.sum() > 0:
-        transformed_keypoints[movable_mask] = np.dot(keypoints[movable_mask], transform[:3, :3].T) + transform[:3, 3]
+        transformed_keypoints[movable_mask] = (
+            np.dot(keypoints[movable_mask], transform[:3, :3].T) + transform[:3, 3]
+        )
     return transformed_keypoints
+
 
 @njit(cache=True, fastmath=True)
 def batch_transform_points(points, transforms):
@@ -74,23 +91,29 @@ def batch_transform_points(points, transforms):
     Returns:
         np.array: point clouds (M, N, 3).
     """
-    assert transforms.shape[1:] == (4, 4), 'transforms must be of shape (M, 4, 4)'
+    assert transforms.shape[1:] == (4, 4), "transforms must be of shape (M, 4, 4)"
     transformed_points = np.zeros((transforms.shape[0], points.shape[0], 3))
     for i in range(transforms.shape[0]):
         pos, R = transforms[i, :3, 3], transforms[i, :3, :3]
         transformed_points[i] = np.dot(points, R.T) + pos
     return transformed_points
 
+
 @njit(cache=True, fastmath=True)
-def get_samples_jitted(control_points_homo, control_points_quat, opt_interpolate_pos_step_size, opt_interpolate_rot_step_size):
+def get_samples_jitted(
+    control_points_homo,
+    control_points_quat,
+    opt_interpolate_pos_step_size,
+    opt_interpolate_rot_step_size,
+):
     assert control_points_homo.shape[1:] == (4, 4)
     # calculate number of samples per segment
     num_samples_per_segment = np.empty(len(control_points_homo) - 1, dtype=np.int64)
     for i in range(len(control_points_homo) - 1):
         start_pos = control_points_homo[i, :3, 3]
         start_rotmat = control_points_homo[i, :3, :3]
-        end_pos = control_points_homo[i+1, :3, 3]
-        end_rotmat = control_points_homo[i+1, :3, :3]
+        end_pos = control_points_homo[i + 1, :3, 3]
+        end_rotmat = control_points_homo[i + 1, :3, :3]
         pos_diff = np.linalg.norm(start_pos - end_pos)
         rot_diff = angle_between_rotmat(start_rotmat, end_rotmat)
         pos_num_steps = np.ceil(pos_diff / opt_interpolate_pos_step_size)
@@ -104,7 +127,10 @@ def get_samples_jitted(control_points_homo, control_points_quat, opt_interpolate
     sample_idx = 0
     for i in range(len(control_points_quat) - 1):
         start_pos, start_xyzw = control_points_quat[i, :3], control_points_quat[i, 3:]
-        end_pos, end_xyzw = control_points_quat[i+1, :3], control_points_quat[i+1, 3:]
+        end_pos, end_xyzw = (
+            control_points_quat[i + 1, :3],
+            control_points_quat[i + 1, 3:],
+        )
         # using proper quaternion slerp interpolation
         poses_7 = np.empty((num_samples_per_segment[i], 7))
         for j in range(num_samples_per_segment[i]):
@@ -115,20 +141,26 @@ def get_samples_jitted(control_points_homo, control_points_quat, opt_interpolate
             pose_7[:3] = pos
             pose_7[3:] = blended_xyzw
             poses_7[j] = pose_7
-        samples_7[sample_idx:sample_idx+num_samples_per_segment[i]] = poses_7
+        samples_7[sample_idx : sample_idx + num_samples_per_segment[i]] = poses_7
         sample_idx += num_samples_per_segment[i]
-    assert num_samples >= 2, f'num_samples: {num_samples}'
+    assert num_samples >= 2, f"num_samples: {num_samples}"
     return samples_7, num_samples
+
 
 @njit(cache=True, fastmath=True)
 def path_length(samples_homo):
-    assert samples_homo.shape[1:] == (4, 4), 'samples_homo must be of shape (N, 4, 4)'
+    assert samples_homo.shape[1:] == (4, 4), "samples_homo must be of shape (N, 4, 4)"
     pos_length = 0
     rot_length = 0
     for i in range(len(samples_homo) - 1):
-        pos_length += np.linalg.norm(samples_homo[i, :3, 3] - samples_homo[i+1, :3, 3])
-        rot_length += angle_between_rotmat(samples_homo[i, :3, :3], samples_homo[i+1, :3, :3])
+        pos_length += np.linalg.norm(
+            samples_homo[i, :3, 3] - samples_homo[i + 1, :3, 3]
+        )
+        rot_length += angle_between_rotmat(
+            samples_homo[i, :3, :3], samples_homo[i + 1, :3, :3]
+        )
     return pos_length, rot_length
+
 
 # ===============================================
 # = others
@@ -139,34 +171,41 @@ def get_callable_grasping_cost_fn(env):
         # import pdb; pdb.set_trace()
         # return -env.is_grasping(candidate_obj=keypoint_object) + 1  # return 0 if grasping an object, 1 if not grasping any object
         return 0
+
     return get_grasping_cost
+
 
 def get_config(config_path=None):
     if config_path is None:
         this_file_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(this_file_dir, 'configs/config.yaml')
-    assert config_path and os.path.exists(config_path), f'config file does not exist ({config_path})'
-    with open(config_path, 'r') as f:
+        config_path = os.path.join(this_file_dir, "configs/config.yaml")
+    assert config_path and os.path.exists(
+        config_path
+    ), f"config file does not exist ({config_path})"
+    with open(config_path, "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     return config
 
+
 class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
 
 def get_clock_time(milliseconds=False):
     curr_time = datetime.datetime.now()
     if milliseconds:
-        return f'{curr_time.hour}:{curr_time.minute}:{curr_time.second}.{curr_time.microsecond // 1000}'
+        return f"{curr_time.hour}:{curr_time.minute}:{curr_time.second}.{curr_time.microsecond // 1000}"
     else:
-        return f'{curr_time.hour}:{curr_time.minute}:{curr_time.second}'
+        return f"{curr_time.hour}:{curr_time.minute}:{curr_time.second}"
+
 
 def angle_between_quats(q1, q2):
     """Angle between two quaternions"""
@@ -186,7 +225,9 @@ def filter_points_by_bounds(points, bounds_min, bounds_max, strict=True):
         points = points.reshape(1, -1)
 
     if points.shape[1] != 3:
-        print(f"Warning: Expected points to have 3 dimensions, but got {points.shape[1]}. Returning empty array.")
+        print(
+            f"Warning: Expected points to have 3 dimensions, but got {points.shape[1]}. Returning empty array."
+        )
         return np.array([])
 
     within_x = (points[:, 0] >= bounds_min[0]) & (points[:, 0] <= bounds_max[0])
@@ -199,6 +240,8 @@ def filter_points_by_bounds(points, bounds_min, bounds_max, strict=True):
         within_bounds = within_x | within_y | within_z
 
     return points[within_bounds]
+
+
 # def filter_points_by_bounds(points, bounds_min, bounds_max, strict=True):
 #     """
 #     Filter points by taking only points within workspace bounds.
@@ -226,97 +269,105 @@ def filter_points_by_bounds(points, bounds_min, bounds_max, strict=True):
 
 #     return points[within_bounds]
 
+
 def print_opt_debug_dict(debug_dict):
-    print('\n' + '#' * 40)
-    print(f'# Optimization debug info:')
+    print("\n" + "#" * 40)
+    print(f"# Optimization debug info:")
     max_key_length = max(len(str(k)) for k in debug_dict.keys())
     for k, v in debug_dict.items():
         if isinstance(v, int) or isinstance(v, float):
-            print(f'# {k:<{max_key_length}}: {v:.05f}')
-        elif isinstance(v, list) and all(isinstance(x, int) or isinstance(x, float) for x in v):
-            print(f'# {k:<{max_key_length}}: {np.array(v).round(5)}')
+            print(f"# {k:<{max_key_length}}: {v:.05f}")
+        elif isinstance(v, list) and all(
+            isinstance(x, int) or isinstance(x, float) for x in v
+        ):
+            print(f"# {k:<{max_key_length}}: {np.array(v).round(5)}")
         else:
-            print(f'# {k:<{max_key_length}}: {v}')
-    print('#' * 40 + '\n')
+            print(f"# {k:<{max_key_length}}: {v}")
+    print("#" * 40 + "\n")
+
 
 def merge_dicts(dicts):
-    return {
-        k : v 
-        for d in dicts
-        for k, v in d.items()
-    }
+    return {k: v for d in dicts for k, v in d.items()}
+
 
 # TODO
-#1. add more ban phrase
-#2. add error handling & logging
+# 1. add more ban phrase
+# 2. add error handling & logging
+
 
 def exec_safe(code_str, gvars=None, lvars=None):
-    banned_phrases = ['import', '__']
+    banned_phrases = ["import", "__"]
     for phrase in banned_phrases:
         assert phrase not in code_str
-  
+
     if gvars is None:
         gvars = {}
     if lvars is None:
         lvars = {}
     empty_fn = lambda *args, **kwargs: None
-    custom_gvars = merge_dicts([
-        gvars,
-        {'exec': empty_fn, 'eval': empty_fn}
-    ])
+    custom_gvars = merge_dicts([gvars, {"exec": empty_fn, "eval": empty_fn}])
     try:
         exec(code_str, custom_gvars, lvars)
     except Exception as e:
-        print(f'Error executing code:\n{code_str}')
+        print(f"Error executing code:\n{code_str}")
         raise e
+
 
 def load_functions_from_txt(txt_path, get_grasping_cost_fn):
     if txt_path is None:
         return []
     # load txt file
-    with open(txt_path, 'r') as f:
+    with open(txt_path, "r") as f:
         functions_text = f.read()
     # execute functions
     gvars_dict = {
-        'np': np,
-        'get_grasping_cost_by_keypoint_idx': get_grasping_cost_fn,
+        "np": np,
+        "get_grasping_cost_by_keypoint_idx": get_grasping_cost_fn,
     }  # external library APIs
     lvars_dict = dict()
     exec_safe(functions_text, gvars=gvars_dict, lvars=lvars_dict)
     return list(lvars_dict.values())
 
+
 @njit(cache=True, fastmath=True)
 def angle_between_rotmat(P, Q):
     R = np.dot(P, Q.T)
-    cos_theta = (np.trace(R)-1)/2
+    cos_theta = (np.trace(R) - 1) / 2
     if cos_theta > 1:
         cos_theta = 1
     elif cos_theta < -1:
         cos_theta = -1
     return np.arccos(cos_theta)
 
+
 def fit_b_spline(control_points):
     # determine appropriate k
-    k = min(3, control_points.shape[0]-1)
+    k = min(3, control_points.shape[0] - 1)
     spline = interpolate.splprep(control_points.T, s=0, k=k)
     return spline
+
 
 def sample_from_spline(spline, num_samples):
     sample_points = np.linspace(0, 1, num_samples)
     if isinstance(spline, RotationSpline):
         samples = spline(sample_points).as_matrix()  # [num_samples, 3, 3]
     else:
-        assert isinstance(spline, tuple) and len(spline) == 2, 'spline must be a tuple of (tck, u)'
+        assert (
+            isinstance(spline, tuple) and len(spline) == 2
+        ), "spline must be a tuple of (tck, u)"
         tck, u = spline
-        samples = interpolate.splev(np.linspace(0, 1, num_samples), tck)  # [spline_dim, num_samples]
+        samples = interpolate.splev(
+            np.linspace(0, 1, num_samples), tck
+        )  # [spline_dim, num_samples]
         samples = np.array(samples).T  # [num_samples, spline_dim]
     return samples
+
 
 def linear_interpolate_poses(start_pose, end_pose, num_poses):
     """
     Interpolate between start and end pose.
     """
-    assert num_poses >= 2, 'num_poses must be at least 2'
+    assert num_poses >= 2, "num_poses must be at least 2"
     if start_pose.shape == (6,) and end_pose.shape == (6,):
         start_pos, start_euler = start_pose[:3], start_pose[3:]
         end_pos, end_euler = end_pose[:3], end_pose[3:]
@@ -333,7 +384,7 @@ def linear_interpolate_poses(start_pose, end_pose, num_poses):
         end_pos, end_quat = end_pose[:3], end_pose[3:]
         end_rotmat = T.quat2mat(end_quat)
     else:
-        raise ValueError('start_pose and end_pose not recognized')
+        raise ValueError("start_pose and end_pose not recognized")
     slerp = Slerp([0, 1], R.from_matrix([start_rotmat, end_rotmat]))
     poses = []
     for i in range(num_poses):
@@ -354,6 +405,7 @@ def linear_interpolate_poses(start_pose, end_pose, num_poses):
             poses.append(pose)
     return np.array(poses)
 
+
 def spline_interpolate_poses(control_points, num_steps):
     """
     Interpolate between through the control points using spline interpolation.
@@ -367,7 +419,7 @@ def spline_interpolate_poses(control_points, num_steps):
     Returns:
         poses: [num_steps, 6] position + euler or [num_steps, 4, 4] pose or [num_steps, 7] position + quat
     """
-    assert num_steps >= 2, 'num_steps must be at least 2'
+    assert num_steps >= 2, "num_steps must be at least 2"
     if isinstance(control_points, list):
         control_points = np.array(control_points)
     if control_points.shape[1] == 6:
@@ -387,7 +439,7 @@ def spline_interpolate_poses(control_points, num_steps):
             control_points_rotmat.append(T.quat2mat(control_point_quat))
         control_points_rotmat = np.array(control_points_rotmat)
     else:
-        raise ValueError('control_points not recognized')
+        raise ValueError("control_points not recognized")
     # remove the duplicate points (threshold 1e-3)
     diff = np.linalg.norm(np.diff(control_points_pos, axis=0), axis=1)
     mask = diff > 1e-3
@@ -423,6 +475,7 @@ def spline_interpolate_poses(control_points, num_steps):
             poses[i] = pose
     return poses
 
+
 def get_linear_interpolation_steps(start_pose, end_pose, pos_step_size, rot_step_size):
     """
     Given start and end pose, calculate the number of steps to interpolate between them.
@@ -450,7 +503,7 @@ def get_linear_interpolation_steps(start_pose, end_pose, pos_step_size, rot_step
         end_pos, end_quat = end_pose[:3], end_pose[3:]
         end_rotmat = T.quat2mat(end_quat)
     else:
-        raise ValueError('start_pose and end_pose not recognized')
+        raise ValueError("start_pose and end_pose not recognized")
     pos_diff = np.linalg.norm(start_pos - end_pos)
     rot_diff = angle_between_rotmat(start_rotmat, end_rotmat)
     pos_num_steps = np.ceil(pos_diff / pos_step_size)
@@ -458,6 +511,7 @@ def get_linear_interpolation_steps(start_pose, end_pose, pos_step_size, rot_step
     num_path_poses = int(max(pos_num_steps, rot_num_steps))
     num_path_poses = max(num_path_poses, 2)  # at least start and end poses
     return num_path_poses
+
 
 def farthest_point_sampling(pc, num_points):
     """
@@ -469,3 +523,4 @@ def farthest_point_sampling(pc, num_points):
     pcd.points = o3d.utility.Vector3dVector(pc)
     downpcd_farthest = pcd.farthest_point_down_sample(num_points)
     return np.asarray(downpcd_farthest.points)
+

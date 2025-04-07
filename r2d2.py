@@ -118,7 +118,7 @@ class MainR2D2:
 
     def _execute(self, rekep_program_dir):
         # load metadata
-        pdb.set_trace()
+        # pdb.set_trace()
         with open(os.path.join(rekep_program_dir, 'metadata.json'), 'r') as f:
             self.program_info = json.load(f)
         # register keypoints to be tracked
@@ -214,7 +214,7 @@ class MainR2D2:
                     self._update_stage(self.stage + 1)
 
     def _get_next_subgoal(self, from_scratch):
-        pdb.set_trace()
+        # pdb.set_trace()
         subgoal_constraints = self.constraint_fns[self.stage]['subgoal']
         path_constraints = self.constraint_fns[self.stage]['path']
         subgoal_pose, debug_dict = self.subgoal_solver.solve(self.curr_ee_pose,
@@ -238,7 +238,7 @@ class MainR2D2:
         return subgoal_pose
 
     def _get_next_path(self, next_subgoal, from_scratch):
-        pdb.set_trace()
+        # pdb.set_trace()
         path_constraints = self.constraint_fns[self.stage]['path']
         path, debug_dict = self.path_solver.solve(self.curr_ee_pose,
                                                     next_subgoal,
@@ -258,7 +258,7 @@ class MainR2D2:
     # TODO: check action sequence
     @timer_decorator
     def _process_path(self, path):
-        pdb.set_trace()
+        # pdb.set_trace()
         # spline interpolate the path from the current ee pose
         full_control_points = np.concatenate([
             self.curr_ee_pose.reshape(1, -1),
@@ -296,7 +296,7 @@ class MainR2D2:
             self.keypoint_movable_mask[i] = self.env.is_grasping(keypoint_object)
 
     def _execute_grasp_action(self):
-        pdb.set_trace()
+        # pdb.set_trace()
         print("Grasp action")
     
     def _execute_release_action(self):
