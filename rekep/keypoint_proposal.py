@@ -1,4 +1,5 @@
 import numpy as np
+import pysnooper
 import torch
 import cv2
 from torch.nn.functional import interpolate
@@ -60,13 +61,14 @@ class KeypointProposer:
         torch.manual_seed(self.config['seed'])
         if torch.cuda.is_available():
             torch.cuda.manual_seed(self.config['seed'])
-
+    @pysnooper.snoop()
     def get_keypoints(self, rgb, points, masks):
         # preprocessing
         transformed_rgb, rgb, points, masks, shape_info = self._preprocess(rgb, points, masks)
         # get features
         features_flat = self._get_features(transformed_rgb, shape_info)
         # for each mask, cluster in feature space to get meaningful regions, and uske their centers as keypoint candidates
+        print('masks shape is ', masks.shape )
         candidate_keypoints, candidate_pixels, candidate_rigid_group_ids = self._cluster_features(points, features_flat, masks)
         
         if 1:
@@ -98,6 +100,8 @@ class KeypointProposer:
 
     def _preprocess(self, rgb, points, masks):
         # input masks should be binary masks
+        masks = self.split_mask(masks).squeeze(-1)
+        print('-----new mask shape is ', masks.shape )
         if masks.dtype != bool:
             masks = masks.astype(bool)
         
@@ -166,6 +170,13 @@ class KeypointProposer:
         rprint(f"[cyan]Debug: features_flat shape: {features_flat.shape}[/cyan]")
         return features_flat
 
+    def split_mask(self, masks):
+        unq = np.unique(masks)
+        split_masks = []
+        for unq_id in unq:
+            split_masks.append(masks == unq_id)
+        return np.array(split_masks)
+    @pysnooper.snoop()
     def _cluster_features(self, points, features_flat, masks):
         candidate_keypoints = []
         candidate_pixels = []
@@ -174,27 +185,40 @@ class KeypointProposer:
         if len(masks) > 0:
             rprint(f"[cyan]Debug: shape of first mask: {masks[0].shape}[/cyan]")
             
+        # breakpoint()
         for rigid_group_id, binary_mask in enumerate(masks):   
             # for mask_id in range(masks_group.shape[0]): # bug: masks_group is a single mask, not a list of masks
             # ignore mask that is too large
             if np.mean(binary_mask) > self.config['max_mask_ratio']:
                 continue
+            # continue_thre = 448 * 448 * self.config['max_mask_ratio']
             # if np.mean(binary_mask) < self.config['min_mask_ratio']:
             #     continue
             # consider only foreground features
             obj_features_flat = features_flat[binary_mask.reshape(-1)]
             feature_pixels = np.argwhere(binary_mask)
+            print(binary_mask.shape, points.shape )
+            # points = points.reshape(-1)
             feature_points = points[binary_mask.reshape(-1)]
-
+            
+            feature_points = feature_points[(feature_points[:, 2] >= -0.4 )& (feature_points[:, 2] <= 1.4) & (np.abs(feature_points[:,1])<1)] # TODO importent
+            from rekep.utils import draw_pc
+            # draw_pc(feature_points)
+            
                 # 过滤掉无效点 (全0的点)
             valid_points = ~np.all(feature_points == 0, axis=1)
+            print(valid_points.shape)
+            if len(valid_points) < 1 :
+                continue 
+            
             obj_features_flat = obj_features_flat[valid_points]
             feature_pixels = feature_pixels[valid_points]
             feature_points = feature_points[valid_points]
-
+            if feature_points.shape[0] < 300:
+                continue
             if len(feature_points) == 0:
                 continue
-
+            # breakpoint()
             # reduce dimensionality to be less sensitive to noise and texture
             obj_features_flat = obj_features_flat.double()
             # if torch.isnan(obj_features_flat).any() or torch.isinf(obj_features_flat).any():
@@ -214,6 +238,8 @@ class KeypointProposer:
                 distance='euclidean',
                 device=self.device,
             )
+            if cluster_ids_x == None : 
+                continue 
             cluster_centers = cluster_centers.to(self.device)
             for cluster_id in range(self.config['num_candidates_per_mask']): # 5
                 member_idx = cluster_ids_x == cluster_id

@@ -1,4 +1,6 @@
 from open3d import data
+
+import open3d  as o3d
 import torch
 import numpy as np
 import json
@@ -55,6 +57,140 @@ def timer_decorator(func):
         print(f"Function {func.__name__} took {end_time - start_time:.2f} seconds to execute")
         return result
     return wrapper
+class MSCamera:
+    """
+    Defines the camera class
+    """
+    def __init__(self, obs,name) -> None:        
+        self.name = name
+        # self.name = 'left_camera'
+        # self.cam = insert_camera(name=config['name'], og_env=og_env, width=config['resolution'], height=config['resolution'])
+        # self.cam.set_position_orientation(config['position'], config['orientation'])
+        # self.data = obs['sensor_data'][self.name]
+        self.obs = obs 
+        self.param = obs['sensor_param'][self.name]
+        # breakpoint()
+        
+        self.intrinsics = self.param['intrinsic_cv']
+        self.extrinsics = self.param['cam2world_gl']
+    def pixel_to_3d_points(self, depth_image, intrinsics, extrinsics):
+        # breakpoint()
+        new_pcd, new_pcd_colors, new_pcd_mask = self.get_3d_point_cloud()
+        # new_pcd = new_pcd[(new_pcd[:, 2] >= -0.4 )& (new_pcd[:, 2] <= 1.4) & (np.abs(new_pcd[:,1])<1)] # TODO importent
+        # self.draw_pc(new_pcd)
+        return new_pcd
+
+    def get_params(self):
+        """
+        Get the intrinsic and extrinsic parameters of the camera
+        """
+        return {"intrinsics": self.intrinsics, "extrinsics": self.extrinsics}
+    
+    def get_obs(self, obs):
+        """
+        Gets the image observation from the camera.
+        Assumes have rendered befor calling this function.
+        No semantic handling here for now.
+        # obs = self.cam.get_obs()
+        """
+        ret = {}
+        ret["rgb"] = obs[0]["rgb"][:,:,:3]  # H, W, 3
+        ret["depth"] = obs[0]["depth_linear"]  # H, W
+        ret["points"] = self.pixel_to_3d_points(ret["depth"], self.intrinsics, self.extrinsics)  # H, W, 3
+        ret["seg"] = obs[0]["seg_semantic"]  # H, W
+        ret["intrinsic"] = self.intrinsics
+        ret["extrinsic"] = self.extrinsics
+        return ret
+    def get_3d_point_cloud(self):
+        obs = self.obs 
+        depth = (
+            np.squeeze(obs["sensor_data"][self.name]["depth"])
+            / 1000.0
+        )
+        rgb = np.squeeze(obs["sensor_data"][self.name]["rgb"])
+        param = obs["sensor_param"][self.name]
+        mask = np.squeeze(
+            obs["sensor_data"][self.name]["segmentation"]
+        )
+
+        intrinsic_matrix = np.squeeze(param["intrinsic_cv"])
+
+        # points_mask_colors = self.depth_to_pc(intrinsic_matrix, depth, rgb, mask)
+        points_colors = self.get_color_points(rgb, depth, param, mask)
+
+        points = points_colors[:, :3]
+        points_mask = mask.reshape((-1, 1))
+        points_colors = points_colors[:, 3:]
+
+        return points, points_colors, points_mask
+
+    """
+    Description:
+        Use camera intrisic matrix and depth map to project 2D image into 3D point cloud
+    Args:
+        rgb: 2D RGB image. If rgb is not None, return colored point cloud.
+        mask: 2D mask. If mask is not None, return masked point cloud.
+    Returns:
+        points: 1-3 cols are 3D point cloud, 4 col is mask, 5-7 cols are rgb.
+    """
+
+    def depth_to_pc(self, K, depth, rgb=None, mask=None):
+        H, W = depth.shape
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+        i, j = np.meshgrid(np.arange(W), np.arange(H), indexing="xy")
+
+        x = (i - cx) * depth / fx
+        y = (j - cy) * depth / fy
+        z = depth
+
+        points = np.vstack((x.flatten(), y.flatten(), z.flatten(), mask.flatten())).T
+
+        flatten_rgb = rgb.reshape((-1, 3))
+        points = np.hstack((points, flatten_rgb))
+        return points
+
+    def get_color_points(self, rgb, depth, cam_param, mask=None):
+        intrinsic_matrix = np.squeeze(cam_param["intrinsic_cv"])
+
+        color_points = self.depth_to_point_cloud(intrinsic_matrix, depth, rgb, mask)
+        # if self.frame == "base":
+        #     return color_points
+        cam2world_gl = np.squeeze(cam_param["cam2world_gl"])
+        color_points[:, :3] = self.transform_camera_to_world(
+            color_points[:, :3], cam2world_gl
+        )
+        return color_points
+
+    def depth_to_point_cloud(self, K, depth, rgb=None, mask=None):
+        H, W = depth.shape
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+        i, j = np.meshgrid(np.arange(W), np.arange(H), indexing="xy")
+
+        x = (i - cx) * depth / fx
+        y = (j - cy) * depth / fy
+        z = depth
+        points = np.vstack((x.flatten(), y.flatten(), z.flatten())).T
+        flatten_rgb = rgb.reshape((H * W, 3))
+        points = np.hstack((points, flatten_rgb))
+        return points
+
+    """
+    Description: 
+        transform point cloud from camera coordinicate to world coordinate
+    """
+
+    def transform_camera_to_world(self, points, extri_mat):
+        R = extri_mat[:3, :3]
+        t = extri_mat[:3, 3]
+        pcd_world = (R @ points.T).T - t
+        rotation_y_180 = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+        pcd_world = (rotation_y_180 @ pcd_world.T).T
+        return pcd_world
+
+
+
 
 @timer_decorator
 class MainR2D2:
@@ -86,9 +222,13 @@ class MainR2D2:
         
     def load_rgbd_data(self):
         obs = self.env.obs 
-        data = obs['sensor_data']['left_camera']
+        # breakpoint()
+        self.came_name = 'left_camera'
+        self.cam = MSCamera(obs, self.came_name)
+        data = obs['sensor_data'][self.came_name]
         rgb = data['rgb']
-        points = data['depth']
+        depth =  data['depth']/1000
+        points = self.cam.pixel_to_3d_points(depth.squeeze(-1), self.cam.intrinsics, self.cam.extrinsics)
         mask = data['segmentation']
         print(rgb)
         # print(data.keys())

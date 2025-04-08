@@ -527,3 +527,65 @@ def farthest_point_sampling(pc, num_points):
     downpcd_farthest = pcd.farthest_point_down_sample(num_points)
     return np.asarray(downpcd_farthest.points)
 
+
+
+
+def pixel_to_3d_points(depth_image, intrinsics, extrinsics):
+    # if torch.is_tensor(intrinsics):
+    #     intrinsics = intrinsics.detach().cpu().numpy()
+    # if torch.is_tensor(extrinsics):
+    #     extrinsics = extrinsics.detach().cpu().numpy()
+    # Get the shape of the depth image
+    H, W = depth_image.shape
+
+    # Create a grid of (x, y) coordinates corresponding to each pixel in the image
+    i, j = np.meshgrid(np.arange(W), np.arange(H), indexing='xy')
+
+    # Unpack the intrinsic parameters
+    fx, fy = intrinsics[0, 0], intrinsics[1, 1]
+    cx, cy = intrinsics[0, 2], intrinsics[1, 2]
+
+    # Convert pixel coordinates to normalized camera coordinates
+    if torch.is_tensor(depth_image):
+        depth_image = depth_image.detach().cpu().numpy()
+    z = depth_image
+    x = (i - cx) * z / fx
+    y = (j - cy) * z / fy
+
+    # Stack the coordinates to form (H, W, 3)
+    camera_coordinates = np.stack((x, y, z), axis=-1)
+
+    # Reshape to (H*W, 3) for matrix multiplication
+    camera_coordinates = camera_coordinates.reshape(-1, 3)
+
+    # Convert to homogeneous coordinates (H*W, 4)
+    camera_coordinates_homogeneous = np.hstack((camera_coordinates, np.ones((camera_coordinates.shape[0], 1))))
+
+    # additional conversion to og convention
+    T_mod = np.array([[1., 0., 0., 0., ],
+              [0., -1., 0., 0.,],
+              [0., 0., -1., 0.,],
+              [0., 0., 0., 1.,]])
+    camera_coordinates_homogeneous = camera_coordinates_homogeneous @ T_mod
+
+    # Apply extrinsics to get world coordinates
+    # world_coordinates_homogeneous = camera_coordinates_homogeneous @ extrinsics.T
+    world_coordinates_homogeneous = T.pose_inv(extrinsics) @ (camera_coordinates_homogeneous.T)
+    world_coordinates_homogeneous = world_coordinates_homogeneous.T
+
+    # Convert back to non-homogeneous coordinates
+    world_coordinates = world_coordinates_homogeneous[:, :3] / world_coordinates_homogeneous[:, 3, np.newaxis]
+
+    # Reshape back to (H, W, 3)
+    world_coordinates = world_coordinates.reshape(H, W, 3)
+
+    return world_coordinates
+
+def draw_pc(pc_arr):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc_arr)
+
+# Visualize the point cloud
+    o3d.visualization.draw_geometries([pcd])
+
+

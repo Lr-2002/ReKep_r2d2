@@ -1,4 +1,5 @@
 import time
+import cv2 
 import torch
 import pysnooper
 import gymnasium as gym
@@ -180,8 +181,16 @@ class ManiEnv:
         # Initialize robot state
         obs, info = self.env.reset()
         obs = self.recursive_process_obs(obs)
+        self.dt= 1/ 60 
         self.obs = obs
         self.update_robot_state(obs)
+    def update_cameras_view(self):
+        obs = self.env.unwrapped.render_all()
+        obs = np.squeeze(obs.numpy())
+        # print(f"\033[91m end-effector position is {self.get_ee_pos()}  \033[0m")
+        bgr_obs_show = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+        cv2.imshow("obs", bgr_obs_show)
+        cv2.waitKey(int(self.dt * 1000))
 
     def recursive_process_obs(self, obs):
         if isinstance(obs, torch.Tensor):
@@ -204,6 +213,7 @@ class ManiEnv:
     @pysnooper.snoop()
     def update_robot_state(self, obs):
         """Read and update robot state from json file"""
+        self.update_cameras_view()
 
         self.current_joint_angles = obs["agent"]["qpos"]
         # kk = obs.keys()
@@ -536,7 +546,8 @@ class ManiEnv:
         # 通过正运动学更新末端执行器位置（在实际应用中需要从真实机器人读取）
         # self.current_eef_position = self.compute_fk(joint_angles)  # 需要实现FK
 
-
 if __name__ == "__main__":
     env = R2D2Env(get_config("../configs/config.yaml")["env"])
     env.is_grasping("apple")
+
+
