@@ -1,5 +1,5 @@
 import time
-import cv2 
+import cv2
 import torch
 import pysnooper
 import gymnasium as gym
@@ -181,9 +181,10 @@ class ManiEnv:
         # Initialize robot state
         obs, info = self.env.reset()
         obs = self.recursive_process_obs(obs)
-        self.dt= 1/ 60 
+        self.dt = 1 / 60
         self.obs = obs
         self.update_robot_state(obs)
+
     def update_cameras_view(self):
         obs = self.env.unwrapped.render_all()
         obs = np.squeeze(obs.numpy())
@@ -200,12 +201,12 @@ class ManiEnv:
             for key, value in obs.items():
                 # print(key, value)
                 obs[key] = self.recursive_process_obs(value)
-        # else: 
+        # else:
         #     return self.recursive_process_obs(obs)
-                # if isinstance(value, dict):
-            #     obs[key] = self.recursive_process_obs(value)
-            # else:
-            #     continue
+        # if isinstance(value, dict):
+        #     obs[key] = self.recursive_process_obs(value)
+        # else:
+        #     continue
         # print(obs)
         # input()
         return obs
@@ -308,75 +309,7 @@ class ManiEnv:
         assert action.shape == (8,)
         target_pose = action[:7]
         gripper_action = action[7]
-
-        # ======================================
-        # = status and safety check
-        # ======================================
-        if np.any(target_pose[:3] < self.bounds_min) or np.any(
-            target_pose[:3] > self.bounds_max
-        ):
-            print(
-                f"{bcolors.WARNING}[environment.py | {get_clock_time()}] Target position is out of bounds, clipping to workspace bounds{bcolors.ENDC}"
-            )
-            target_pose[:3] = np.clip(target_pose[:3], self.bounds_min, self.bounds_max)
-
-        # ======================================
-        # = interpolation
-        # ======================================
-        current_pose = self.get_ee_pose()
-        pos_diff = np.linalg.norm(current_pose[:3] - target_pose[:3])
-        rot_diff = angle_between_quats(current_pose[3:7], target_pose[3:7])
-        pos_is_close = pos_diff < self.interpolate_pos_step_size
-        rot_is_close = rot_diff < self.interpolate_rot_step_size
-        if pos_is_close and rot_is_close:
-            self.verbose and print(
-                f"{bcolors.WARNING}[environment.py | {get_clock_time()}] Skipping interpolation{bcolors.ENDC}"
-            )
-            pose_seq = np.array([target_pose])
-        else:
-            num_steps = get_linear_interpolation_steps(
-                current_pose,
-                target_pose,
-                self.interpolate_pos_step_size,
-                self.interpolate_rot_step_size,
-            )
-            pose_seq = linear_interpolate_poses(current_pose, target_pose, num_steps)
-            self.verbose and print(
-                f"{bcolors.WARNING}[environment.py | {get_clock_time()}] Interpolating for {num_steps} steps{bcolors.ENDC}"
-            )
-
-        # ======================================
-        # = move to target pose
-        # ======================================
-        # move faster for intermediate poses
-        intermediate_pos_threshold = 0.10
-        intermediate_rot_threshold = 5.0
-        for pose in pose_seq[:-1]:
-            self._move_to_waypoint(
-                pose, intermediate_pos_threshold, intermediate_rot_threshold
-            )
-        # move to the final pose with required precision
-        pose = pose_seq[-1]
-        self._move_to_waypoint(
-            pose, pos_threshold, rot_threshold, max_steps=20 if not precise else 40
-        )
-        # compute error
-        pos_error, rot_error = self.compute_target_delta_ee(target_pose)
-        self.verbose and print(
-            f"\n{bcolors.BOLD}[environment.py | {get_clock_time()}] Move to pose completed (pos_error: {pos_error}, rot_error: {np.rad2deg(rot_error)}){bcolors.ENDC}\n"
-        )
-
-        # ======================================
-        # = apply gripper action
-        # ======================================
-        if gripper_action == self.get_gripper_open_action():
-            self.open_gripper()
-        elif gripper_action == self.get_gripper_close_action():
-            self.close_gripper()
-        elif gripper_action == self.get_gripper_null_action():
-            pass
-        else:
-            raise ValueError(f"Invalid gripper action: {gripper_action}")
+        self.env.step(action)
 
         return pos_error, rot_error
 
@@ -415,6 +348,7 @@ class ManiEnv:
         return self.keypoints
 
     def get_object_by_keypoint(self, keypoint_idx):
+        breakpoint()
         # TODO: asscociate keypoints with closest object (mask?)
         return None
 
@@ -546,8 +480,7 @@ class ManiEnv:
         # 通过正运动学更新末端执行器位置（在实际应用中需要从真实机器人读取）
         # self.current_eef_position = self.compute_fk(joint_angles)  # 需要实现FK
 
+
 if __name__ == "__main__":
     env = R2D2Env(get_config("../configs/config.yaml")["env"])
     env.is_grasping("apple")
-
-
